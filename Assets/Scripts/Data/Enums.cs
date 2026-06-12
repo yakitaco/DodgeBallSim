@@ -17,6 +17,7 @@ namespace DodgeBallSim.Data
     // ボールの物理・ルール上の状態
     public enum BallState 
     { 
+        Free,
         Idle,       // 誰にも持たれず転がっている
         Held,       // 誰かが持っている
         Thrown,     // 投げられてノーバウンドの状態（攻撃力あり）

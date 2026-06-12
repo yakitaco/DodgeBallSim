@@ -93,7 +93,7 @@ namespace DodgeBallSim.AI
             if (!HasBall) return;
 
             // 頭上やや前方から射出
-            heldBall.transform.position = transform.position + transform.forward * 1.5f + Vector3.up * 1.2f;
+            //heldBall.transform.position = transform.position + transform.forward * 1.5f + Vector3.up * 1.2f;
             
             // 相手の内野に届くように斜め上へ投げる
             Vector3 throwVector = transform.forward * throwForce + Vector3.up * 3f;
@@ -109,7 +109,7 @@ namespace DodgeBallSim.AI
             // ボールを持っている間は頭上にキープ
             if (HasBall)
             {
-                heldBall.transform.position = transform.position + Vector3.up * 2.5f;
+                //heldBall.transform.position = transform.position + Vector3.up * 2.5f;
             }
         }
     }

@@ -6,9 +6,10 @@ namespace DodgeBallSim.Communication
     // 発言の種類
     public enum MessageType
     {
-        WatchOut,   // 「危ない！敵が狙ってるぞ！」（死角からの攻撃を回避させる）
-        PassMe,     // 「パスくれ！」（外野が内野に、または内野同士での要求）
-        ImThrowing  // 「今から投げるぞ！」（味方に心の準備をさせる）
+        WatchOut,    // 「危ない！敵が狙ってるぞ！」（死角からの攻撃を回避させる）
+        PassMe,      // 「パスくれ！」（外野が内野に、または内野同士での要求）
+        ImThrowing,  // 「今から投げるぞ！」（味方に心の準備をさせる）
+        GoingForBall // 「俺がボールを取りに行く！」
     }
 
     // 空間を飛び交う音声データの構造

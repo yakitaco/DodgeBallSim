@@ -6,7 +6,6 @@ using DodgeBallSim.Communication;
 
 namespace DodgeBallSim.AI
 {
-
     public enum AIState
     {
         Idle,       // 視界を回して状況を把握する
@@ -29,6 +28,10 @@ namespace DodgeBallSim.AI
         public float attackRange = 15f;
         public float evadeDistance = 8f;
         public float voiceRange = 20f; // 声の届く最大距離
+
+        // 首振り索敵用の制御変数
+        private float scanTimer = 0f;
+        private bool scanRight = true;
 
         // 受信した「声」のバッファ
         private List<ReceivedVoice> voiceQueue = new List<ReceivedVoice>();
@@ -64,7 +67,6 @@ namespace DodgeBallSim.AI
         private void Update()
         {
             if (!myBody.IsAlive) return;
-
             if (voiceCooldown > 0) voiceCooldown -= Time.deltaTime;
 
             List<MentalMapObject> mentalMap = memory.GetMentalMap();
@@ -100,16 +102,26 @@ namespace DodgeBallSim.AI
                 return;
             }
 
-            // 外野にいて、フリーのボールが転がっていない場合、内野の味方に「パスくれ！」と要求
+            if (FindClosestFreeBall(map, out MentalMapObject targetBall))
+            {
+                if (HasReceivedTeammateVoice(MessageType.GoingForBall, out ReceivedVoice voice))
+                {
+                    float distanceToBall = targetBall.currentRelativePosition.magnitude;
+                    if (voice.volume > 0.4f && distanceToBall > 3.0f)
+                    {
+                        // 味方に譲って待機するが、ターゲット（ボール）は見失わない
+                        currentState = AIState.Idle;
+                        return;
+                    }
+                }
+
+                currentState = AIState.ChaseBall;
+                return;
+            }
+
             if (myBody.CurrentPosition == PositionState.Outer && !FindClosestFreeBall(map, out _))
             {
                 CallOut(MessageType.PassMe);
-            }
-
-            if (FindClosestFreeBall(map, out _))
-            {
-                currentState = AIState.ChaseBall;
-                return;
             }
 
             currentState = AIState.Idle;
@@ -120,13 +132,28 @@ namespace DodgeBallSim.AI
             switch (currentState)
             {
                 case AIState.Idle:
-                    action.RotateTowards(new Vector3(1f, 0f, 1f));
-                    action.Move(Vector3.zero);
+                    if (FindClosestFreeBall(map, out MentalMapObject ball))
+                    {
+                        // 1. ボールが記憶にあるなら、立ち止まってそれを「じっと注視」する
+                        action.RotateTowards(ball.currentRelativePosition);
+                    }
+                    else if (FindClosestEnemy(map, out MentalMapObject observedEnemy)) 
+                    {
+                        // 2. ボールがなく敵がいるなら、敵を「じっと注視」する
+                        action.RotateTowards(observedEnemy.currentRelativePosition);
+                    }
+                    else
+                    {
+                        // 3. 本当に何も見えない時だけ、左右に「キョロキョロ」と首を振って見渡す
+                        SimulateHumanScanning();
+                    }
+                    action.Move(Vector3.zero); // 待機なので移動はゼロ
                     break;
 
                 case AIState.ChaseBall:
                     if (FindClosestFreeBall(map, out MentalMapObject targetBall))
                     {
+                        CallOut(MessageType.GoingForBall);
                         action.RotateTowards(targetBall.currentRelativePosition);
                         action.Move(targetBall.currentRelativePosition.normalized);
 
@@ -184,10 +211,26 @@ namespace DodgeBallSim.AI
                     }
                     else
                     {
-                        action.RotateTowards(new Vector3(1f, 0f, 1f));
+                        SimulateHumanScanning();
                     }
                     break;
             }
+        }
+
+        // 首を振る人間的な索敵処理
+        private void SimulateHumanScanning()
+        {
+            scanTimer += Time.deltaTime;
+            if (scanTimer > 1.2f) // 1.2秒ごとに左右へ首を振り直す
+            {
+                scanRight = !scanRight;
+                scanTimer = 0f;
+            }
+
+            // 正面(forward)を基準に、左右に少しだけ角度をつけたローカルベクトルを作る
+            // ぐるぐる回らず、現在の向きの周辺を優しく見渡す挙動になる
+            Vector3 scanDir = scanRight ? (Vector3.forward + Vector3.right * 0.6f) : (Vector3.forward + Vector3.left * 0.6f);
+            action.RotateTowards(scanDir);
         }
 
         // 空間ネットワークへ声を発信する処理
@@ -205,7 +248,7 @@ namespace DodgeBallSim.AI
             };
 
             CommsNetwork.Instance.BroadcastVoice(msg, voiceRange);
-            voiceCooldown = 0.5f; // 連呼スロットリング（0.5秒間は静かにする）
+            voiceCooldown = (type == MessageType.GoingForBall) ? 0.2f : 0.5f;
         }
 
         // 特定のメッセージを味方から受信したかチェックするヘルパー
