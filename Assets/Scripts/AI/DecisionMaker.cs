@@ -11,7 +11,8 @@ namespace DodgeBallSim.AI
         Idle,       // 視界を回して状況を把握する
         ChaseBall,  // 落ちているボールを拾いに行く
         Evade,      // ボールを持った敵から逃げる
-        Attack      // ボールを敵に向かって投げる
+        Attack,     // ボールを敵に向かって投げる
+        GoToOuter
     }
 
     [RequireComponent(typeof(MemorySystem), typeof(ActionController), typeof(CharacterBody))]
@@ -36,6 +37,10 @@ namespace DodgeBallSim.AI
         // 受信した「声」のバッファ
         private List<ReceivedVoice> voiceQueue = new List<ReceivedVoice>();
         private float voiceCooldown = 0f; // 連呼防止
+
+        [Header("戦術移動")]
+        private Vector3 tacticalTargetPos; // AIが「次に行きたい」と考える目標座標
+        private float tacticTimer = 0f;    // 目標座標を再計算するタイマー
 
         private void Awake()
         {
@@ -66,7 +71,14 @@ namespace DodgeBallSim.AI
 
         private void Update()
         {
-            if (!myBody.IsAlive) return;
+            // 【変更】死んでいる場合は外野へ向かう専用処理に切り替え
+            if (!myBody.IsAlive)
+            {
+                currentState = AIState.GoToOuter;
+                ExecuteState(null); // 死んでいる時は周りの状況（MentalMap）は気にしない
+                return;
+            }
+
             if (voiceCooldown > 0) voiceCooldown -= Time.deltaTime;
 
             List<MentalMapObject> mentalMap = memory.GetMentalMap();
@@ -132,86 +144,136 @@ namespace DodgeBallSim.AI
             switch (currentState)
             {
                 case AIState.Idle:
-                    if (FindClosestFreeBall(map, out MentalMapObject ball))
-                    {
-                        // 1. ボールが記憶にあるなら、立ち止まってそれを「じっと注視」する
+                    // 索敵＆ポジション移動（速度50%でウロウロ歩く）
+                    UpdateTacticalPosition(map, false);
+                    Vector3 toWander = tacticalTargetPos - transform.position;
+                    toWander.y = 0;
+
+                    if (FindClosestFreeBall(map, out MentalMapObject ball)) {
                         action.RotateTowards(ball.currentRelativePosition);
-                    }
-                    else if (FindClosestEnemy(map, out MentalMapObject observedEnemy)) 
-                    {
-                        // 2. ボールがなく敵がいるなら、敵を「じっと注視」する
-                        action.RotateTowards(observedEnemy.currentRelativePosition);
-                    }
-                    else
-                    {
-                        // 3. 本当に何も見えない時だけ、左右に「キョロキョロ」と首を振って見渡す
+                    } else if (FindClosestEnemy(map, out MentalMapObject enemyObj)) {
+                        action.RotateTowards(enemyObj.currentRelativePosition);
+                    } else {
                         SimulateHumanScanning();
                     }
-                    action.Move(Vector3.zero); // 待機なので移動はゼロ
+
+                    if (toWander.magnitude > 0.5f) {
+                        Vector3 localMoveDir = transform.InverseTransformDirection(toWander.normalized);
+                        action.Move(localMoveDir, 0.5f); // 半分の速度で歩く
+                    } else {
+                        action.Move(Vector3.zero);
+                    }
                     break;
 
                 case AIState.ChaseBall:
+                    // ボールに向かってダッシュ（速度100%）
                     if (FindClosestFreeBall(map, out MentalMapObject targetBall))
                     {
                         CallOut(MessageType.GoingForBall);
                         action.RotateTowards(targetBall.currentRelativePosition);
-                        action.Move(targetBall.currentRelativePosition.normalized);
+                        action.Move(targetBall.currentRelativePosition.normalized, 1.0f);
 
-                        if (targetBall.currentRelativePosition.magnitude < 2.0f)
-                        {
+                        if (targetBall.currentRelativePosition.magnitude < 2.0f) {
                             action.TryGrabBall();
                         }
                     }
                     break;
 
                 case AIState.Evade:
-                    // 視界の敵から逃げる
-                    if (FindClosestThreat(map, out MentalMapObject threat))
-                    {
-                        Vector3 evadeDir = -threat.currentRelativePosition;
-                        action.RotateTowards(evadeDir);
-                        action.Move(evadeDir.normalized);
+                    // 敵から逃げる（陣地の端に沿ってカニ歩き/後退する）
+                    Vector3 evadeTarget = transform.position;
+                    bool shouldEvade = false;
+
+                    if (FindClosestThreat(map, out MentalMapObject threat)) {
+                        Vector3 evadeWorldDir = -transform.TransformDirection(threat.currentRelativePosition).normalized;
+                        evadeTarget = transform.position + evadeWorldDir * 5f;
+                        shouldEvade = true;
+                    } else if (HasReceivedTeammateVoice(MessageType.WatchOut, out ReceivedVoice voice)) {
+                        Vector3 evadeWorldDir = -transform.TransformDirection(voice.relativeDirection).normalized;
+                        evadeTarget = transform.position + evadeWorldDir * 5f;
+                        shouldEvade = true;
                     }
-                    // 視界にいないが声で警告された場合、聞こえた方向の「真後ろ」へ逃げる
-                    else if (HasReceivedTeammateVoice(MessageType.WatchOut, out ReceivedVoice voice))
+
+                    if (shouldEvade)
                     {
-                        Vector3 evadeDir = -voice.relativeDirection;
-                        action.RotateTowards(evadeDir);
-                        action.Move(evadeDir.normalized);
+                        // 壁を突き抜けず、安全な範囲内で最大限逃げる
+                        evadeTarget = ClampToMyArea(evadeTarget);
+                        Vector3 toEvade = evadeTarget - transform.position;
+                        toEvade.y = 0;
+
+                        if (toEvade.magnitude > 0.5f) {
+                            Vector3 localEvadeDir = transform.InverseTransformDirection(toEvade.normalized);
+                            action.RotateTowards(localEvadeDir); // 逃げる方向へ体を向ける
+                            action.Move(localEvadeDir, 1.0f); // ダッシュで逃げる
+                        } else {
+                            // エリアの端に追い詰められたら立ち止まって敵を警戒
+                            if (FindClosestThreat(map, out MentalMapObject threat2)) {
+                                action.RotateTowards(threat2.currentRelativePosition);
+                            }
+                            action.Move(Vector3.zero);
+                        }
                     }
                     break;
 
                 case AIState.Attack:
-                    // 外野の味方から「パス！」の要求があり、かつ目の前に敵が詰まっていない場合パスを出す（挟み撃ち戦術）
                     if (HasReceivedTeammateVoice(MessageType.PassMe, out ReceivedVoice passReqVoice))
                     {
-                        Debug.Log($"【AI協調】{gameObject.name} は味方のパス要求を検知。声の方向へパスします！");
                         action.RotateTowards(passReqVoice.relativeDirection);
                         action.Move(Vector3.zero);
-                        
-                        if (passReqVoice.relativeDirection.normalized.z > 0.95f)
-                        {
-                            action.ThrowBall();
-                        }
+                        if (passReqVoice.relativeDirection.normalized.z > 0.95f) { action.ThrowBall(); }
                         break;
                     }
 
-                    // 通常攻撃：敵を狙う
-                    if (FindClosestEnemy(map, out MentalMapObject enemy))
+                    // 通常攻撃：敵を狙う際、第3引数に true を渡して「相手の内野」のみをターゲットにする
+                    if (FindClosestEnemy(map, out MentalMapObject enemy, true))
                     {
                         action.RotateTowards(enemy.currentRelativePosition);
-                        action.Move(Vector3.zero);
 
+                        // 投げるために前線へ接近する（速度80%の小走り）
+                        UpdateTacticalPosition(map, true); 
+                        Vector3 toAttackPos = tacticalTargetPos - transform.position;
+                        toAttackPos.y = 0;
+
+                        if (toAttackPos.magnitude > 0.5f) {
+                            Vector3 localMoveDir = transform.InverseTransformDirection(toAttackPos.normalized);
+                            action.Move(localMoveDir, 0.8f); 
+                        } else {
+                            action.Move(Vector3.zero);
+                        }
+
+                        // 正面を捉えており、フェイントや接近が十分だと判断したら投げる
                         Vector3 targetDir = enemy.currentRelativePosition.normalized;
                         if (targetDir.z > 0.95f)
                         {
-                            CallOut(MessageType.ImThrowing); // 「投げるぞ！」と味方に宣言
+                            CallOut(MessageType.ImThrowing);
                             action.ThrowBall();
                         }
                     }
                     else
                     {
                         SimulateHumanScanning();
+                        action.Move(Vector3.zero);
+                    }
+                    break;
+
+                case AIState.GoToOuter: // 前回のプロンプトで追加した状態
+                    float outerCenterZ = (myBody.MyTeam == Team.TeamA) ? 16.5f : -16.5f;
+                    Vector3 targetPos = new Vector3(0f, 1f, outerCenterZ);
+                    
+                    Vector3 toTarget = targetPos - transform.position;
+                    toTarget.y = 0;
+
+                    if (toTarget.magnitude > 1.0f)
+                    {
+                        Vector3 localDir = transform.InverseTransformDirection(toTarget.normalized);
+                        action.RotateTowards(localDir);
+                        action.Move(localDir, 0.6f); // 外野へは少しゆっくり歩く
+                    }
+                    else
+                    {
+                        action.Move(Vector3.zero);
+                        Vector3 lookCenter = transform.InverseTransformDirection((Vector3.zero - transform.position).normalized);
+                        action.RotateTowards(lookCenter);
                     }
                     break;
             }
@@ -280,13 +342,17 @@ namespace DodgeBallSim.AI
             return found;
         }
 
-        private bool FindClosestEnemy(List<MentalMapObject> map, out MentalMapObject closestEnemy)
+        private bool FindClosestEnemy(List<MentalMapObject> map, out MentalMapObject closestEnemy, bool targetInnerOnly = false)
         {
             closestEnemy = default; float minDistance = float.MaxValue; bool found = false;
             foreach (var obj in map) {
                 if (obj.gameObject == null) continue;
                 CharacterBody otherBody = obj.gameObject.GetComponent<CharacterBody>();
                 if (otherBody != null && otherBody.MyTeam != myBody.MyTeam && otherBody.IsAlive) {
+                    
+                    // 攻撃対象を内野に限定する場合、相手が外野ならスキップする
+                    if (targetInnerOnly && otherBody.CurrentPosition != PositionState.Inner) continue;
+
                     float dist = obj.currentRelativePosition.magnitude;
                     if (dist < minDistance) { minDistance = dist; closestEnemy = obj; found = true; }
                 }
@@ -304,5 +370,78 @@ namespace DodgeBallSim.AI
         }
 
         private bool IsThreatened(List<MentalMapObject> map) { return FindClosestThreat(map, out _); }
+        
+        // コート内の自分の陣地（または外野）からはみ出さないように座標を丸める
+        private Vector3 ClampToMyArea(Vector3 pos)
+        {
+            float minX = -9f; float maxX = 9f; // コート横幅（端から少し余裕を持たせる）
+            float minZ = 0f;  float maxZ = 0f;
+
+            if (myBody.CurrentPosition == PositionState.Inner)
+            {
+                // 内野: センターライン(Z=0)を越えないように制限
+                if (myBody.MyTeam == Team.TeamA) { minZ = -14f; maxZ = -0.5f; }
+                else                             { minZ = 0.5f; maxZ = 14f; }
+            }
+            else
+            {
+                // 外野: 相手チームの奥のエリアに制限
+                if (myBody.MyTeam == Team.TeamA) { minZ = 15.5f; maxZ = 17.5f; }
+                else                             { minZ = -17.5f; maxZ = -15.5f; }
+            }
+
+            pos.x = Mathf.Clamp(pos.x, minX, maxX);
+            pos.z = Mathf.Clamp(pos.z, minZ, maxZ);
+            pos.y = transform.position.y;
+            return pos;
+        }
+
+        // 数秒ごとに「ウロウロする」「分散する」「前に詰める」目標地点を決定する
+        private void UpdateTacticalPosition(List<MentalMapObject> map, bool isAttacking = false)
+        {
+            tacticTimer -= Time.deltaTime;
+            if (tacticTimer > 0f) return;
+            
+            tacticTimer = Random.Range(1.0f, 2.5f); // 1〜2.5秒ごとに次の動きを考える
+
+            Vector3 newTarget = transform.position;
+
+            if (isAttacking)
+            {
+                // 攻撃時：相手に近い前線（センターライン寄り）へ接近する
+                float attackZ = (myBody.MyTeam == Team.TeamA && myBody.CurrentPosition == PositionState.Inner) ? -2f :
+                                (myBody.MyTeam == Team.TeamB && myBody.CurrentPosition == PositionState.Inner) ?  2f : 
+                                transform.position.z;
+                
+                // 外野からの攻撃時は内野ラインギリギリまで寄る
+                if (myBody.CurrentPosition == PositionState.Outer) {
+                    attackZ = (myBody.MyTeam == Team.TeamA) ? 15.5f : -15.5f;
+                }
+                newTarget = new Vector3(transform.position.x, 1f, attackZ);
+            }
+            else
+            {
+                // 通常時：ランダムにウロウロする（ボールを探す＆的を絞らせない）
+                newTarget += new Vector3(Random.Range(-4f, 4f), 0, Random.Range(-4f, 4f));
+                
+                // 味方同士の分散（固まっていると当てられやすいので離れる）
+                foreach (var obj in map)
+                {
+                    if (obj.gameObject == null) continue;
+                    CharacterBody other = obj.gameObject.GetComponent<CharacterBody>();
+                    if (other != null && other.MyTeam == myBody.MyTeam && other.CurrentPosition == myBody.CurrentPosition)
+                    {
+                        if (obj.currentRelativePosition.magnitude < 3.0f) // 味方が近すぎたら
+                        {
+                            // 離れる方向へ反発力を加える
+                            Vector3 awayWorldDir = -transform.TransformDirection(obj.currentRelativePosition).normalized;
+                            newTarget += awayWorldDir * 2.0f;
+                        }
+                    }
+                }
+            }
+            // 最終的な目標地点がコート外に出ないように制限
+            tacticalTargetPos = ClampToMyArea(newTarget);
+        }
     }
 }

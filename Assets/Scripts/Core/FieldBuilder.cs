@@ -40,15 +40,51 @@ namespace DodgeBallSim.Core
             ground.transform.localScale = new Vector3(settings.courtWidth / 10f, 1f, totalLength / 10f);
 
             Renderer groundRenderer = ground.GetComponent<Renderer>();
-            groundRenderer.material = new Material(Shader.Find("Standard"));
+            groundRenderer.material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
             groundRenderer.material.color = new Color(0.2f, 0.6f, 0.2f);
 
-            GameObject centerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            centerLine.name = "CenterLine";
-            centerLine.transform.position = new Vector3(0f, 0.01f, 0f);
-            centerLine.transform.localScale = new Vector3(settings.courtWidth, 0.01f, 0.2f);
-            centerLine.GetComponent<Renderer>().material.color = Color.white;
-            Destroy(centerLine.GetComponent<Collider>());
+            float lineWidth = 0.2f;
+            float lineThickness = 0.01f;
+            Color lineColor = Color.white;
+
+            // 1. センターライン (Z = 0)
+            CreateLine("CenterLine", new Vector3(0f, lineThickness, 0f), new Vector3(settings.courtWidth, lineThickness, lineWidth), lineColor);
+
+            // 2. チームA側 エンドライン（内野と外野の境界線 Z = -courtLength / 2）
+            float endLineA_Z = -settings.courtLength / 2f;
+            CreateLine("EndLine_A", new Vector3(0f, lineThickness, endLineA_Z), new Vector3(settings.courtWidth, lineThickness, lineWidth), lineColor);
+
+            // 3. チームB側 エンドライン（内野と外野の境界線 Z = courtLength / 2）
+            float endLineB_Z = settings.courtLength / 2f;
+            CreateLine("EndLine_B", new Vector3(0f, lineThickness, endLineB_Z), new Vector3(settings.courtWidth, lineThickness, lineWidth), lineColor);
+
+            // 4. 左サイドライン (X = -courtWidth / 2, 全長にわたって描画)
+            CreateLine("SideLine_Left", new Vector3(-settings.courtWidth / 2f, lineThickness, 0f), new Vector3(lineWidth, lineThickness, totalLength), lineColor);
+
+            // 5. 右サイドライン (X = courtWidth / 2, 全長にわたって描画)
+            CreateLine("SideLine_Right", new Vector3(settings.courtWidth / 2f, lineThickness, 0f), new Vector3(lineWidth, lineThickness, totalLength), lineColor);
+
+            // 6. 外野奥のバックライン（チームA側 Z = -totalLength / 2）
+            CreateLine("OuterBackLine_A", new Vector3(0f, lineThickness, -totalLength / 2f), new Vector3(settings.courtWidth, lineThickness, lineWidth), lineColor);
+
+            // 7. 外野奥のバックライン（チームB側 Z = totalLength / 2）
+            CreateLine("OuterBackLine_B", new Vector3(0f, lineThickness, totalLength / 2f), new Vector3(settings.courtWidth, lineThickness, lineWidth), lineColor);
+        }
+
+        // 【新規追加】ラインを個別に生成するヘルパーメソッド
+        private void CreateLine(string name, Vector3 position, Vector3 scale, Color color)
+        {
+            GameObject line = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            line.name = name;
+            line.transform.position = position;
+            line.transform.localScale = scale;
+            
+            Renderer lineRenderer = line.GetComponent<Renderer>();
+            lineRenderer.material = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+            lineRenderer.material.color = color;
+            
+            // ボールやキャラクターの物理演算に干渉しないよう、コライダーを削除
+            Destroy(line.GetComponent<Collider>());
         }
 
         // 外野も含めた全エリアを囲む壁を生成するメソッド
@@ -59,16 +95,7 @@ namespace DodgeBallSim.Core
             float wallThickness = 0.5f; // 壁の厚み
 
             // 半透明のグレーの共通マテリアル（視覚的に壁がわかるように）
-            Material wallMat = new Material(Shader.Find("Standard"));
-            wallMat.SetFloat("_Mode", 3f); // Transparentモードに変形
-            wallMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-            wallMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-            wallMat.SetInt("_ZWrite", 0);
-            wallMat.DisableKeyword("_ALPHATEST_ON");
-            wallMat.EnableKeyword("_ALPHABLEND_ON");
-            wallMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-            wallMat.renderQueue = 3000;
-            wallMat.color = new Color(0.8f, 0.8f, 0.8f, 0.2f); // 薄い半透明グレー
+            Material wallMat = Resources.Load<Material>("WallMaterial");
 
             // 1. 奥の壁（チームB側外野の後ろ）
             BuildWall("Wall_Back_B", new Vector3(0f, wallHeight / 2f, totalLength / 2f), new Vector3(settings.courtWidth, wallHeight, wallThickness), wallMat);

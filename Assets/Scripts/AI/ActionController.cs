@@ -33,7 +33,7 @@ namespace DodgeBallSim.AI
         // --- DecisionMakerから呼ばれる運動API ---
 
         // 相対方向（ローカルベクトル）へ移動する
-        public void Move(Vector3 localDirection)
+        public void Move(Vector3 localDirection, float speedRatio = 1f)
         {
             if (localDirection == Vector3.zero)
             {
@@ -41,9 +41,9 @@ namespace DodgeBallSim.AI
                 return;
             }
 
-            // ローカル方向をワールド方向の速度に変換
+            // ローカル方向をワールド方向の速度に変換（speedRatioで緩急をつける）
             Vector3 worldDirection = transform.TransformDirection(localDirection.normalized);
-            rb.linearVelocity = new Vector3(worldDirection.x * moveSpeed, rb.linearVelocity.y, worldDirection.z * moveSpeed);
+            rb.linearVelocity = new Vector3(worldDirection.x * moveSpeed * speedRatio, rb.linearVelocity.y, worldDirection.z * moveSpeed * speedRatio);
         }
 
         // 相対方向（ローカルベクトル）へ体を向ける
@@ -62,12 +62,11 @@ namespace DodgeBallSim.AI
             }
         }
 
-        // ボールを拾う（手探りの物理判定）
+        // ボールを拾う
         public void TryGrabBall()
         {
             if (HasBall) return;
 
-            // 近くのボールを物理的に探す
             Collider[] colliders = Physics.OverlapSphere(transform.position, grabRadius);
             foreach (Collider col in colliders)
             {
@@ -75,13 +74,17 @@ namespace DodgeBallSim.AI
                 if (ball != null && ball.CurrentState != BallState.Held)
                 {
                     heldBall = ball;
+                    
+                    // キャラクターを親に設定し、Ball.cs側のLerp(スムーズ移動)を実行
+                    heldBall.transform.SetParent(this.transform);
+                    
                     heldBall.Hold();
                     
                     if (RefereeSystem.Instance != null)
                     {
                         RefereeSystem.Instance.ReportCatch(heldBall, myBody);
                     }
-                    Debug.Log($"{gameObject.name} が自律的にボールを取得しました。");
+                    Debug.Log($"{gameObject.name} がボールを取得しました。");
                     break;
                 }
             }

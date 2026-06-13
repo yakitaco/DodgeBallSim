@@ -80,15 +80,9 @@ namespace DodgeBallSim.Core
         private void ExecuteOut(CharacterBody victim)
         {
             if (!victim.IsAlive) return;
-
             victim.Eliminate();
             victim.ChangePosition(PositionState.Outer);
             Debug.Log($"【審判】アウト！！ {victim.name} は外野へ移動します。");
-
-            // 外野の適当な位置へテレポートさせる（本来は外野エリアの計算が必要）
-            float sideSign = (victim.MyTeam == Team.TeamA) ? -1f : 1f;
-            Vector3 outerPos = new Vector3(Random.Range(-5f, 5f), 1f, -sideSign * 18f); 
-            victim.transform.position = outerPos;
         }
     }
 }
